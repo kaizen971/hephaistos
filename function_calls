@@ -1,0 +1,252 @@
+import { Snack } from 'snack-sdk';
+import React, { useEffect, useState, useRef } from 'react';
+import Editor from '@monaco-editor/react';
+
+const App = () => {
+  const webPreviewRef = useRef(null);
+  const [webPreviewURL, setWebPreviewURL] = useState(null);
+  const [downloadURL, setDownloadURL] = useState(null);
+  const [phoneModel, setPhoneModel] = useState({
+    name: 'iPhone 12',
+    width: 340,
+    height: 680,
+    label: 'iPhone 12'
+  });
+  const [code, setCode] = useState(`
+import * as React from 'react';
+import { View, Text } from 'react-native';
+
+const App = () => (
+  <View style={{flex: 1, justifyContent: 'center'}}>
+    <Text style={{fontSize: 20, textAlign: 'center', color: 'red'}}>
+      Hello SnacKD!
+    </Text>
+  </View>
+);
+
+export default App;
+`);
+
+  const phoneModels = [
+    { name: 'iPhone SE', width: 300, height: 580, label: 'iPhone SE' },
+    { name: 'iPhone 12', width: 340, height: 680, label: 'iPhone 12' },
+    { name: 'iPhone 12 Pro Max', width: 380, height: 750, label: 'iPhone 12 Pro Max' },
+    { name: 'Galaxy S21', width: 350, height: 700, label: 'Galaxy S21' },
+    { name: 'Pixel 5', width: 330, height: 660, label: 'Pixel 5' },
+  ];
+
+  const changePhoneModel = (model) => {
+    setPhoneModel(model);
+  };
+
+  useEffect(() => {
+    const initializeSnack = async () => {
+      const snack = new Snack({
+        files: {
+          'App.js': {
+            type: 'CODE',
+            contents: code
+          }
+        },
+        webPreviewRef
+      });
+      console.log(snack);
+
+      snack.setOnline(true);
+      const { url } = await snack.getStateAsync();
+      console.log(url);
+      snack.setOnline(false);
+      const urls = await snack.getDownloadURLAsync();
+      setDownloadURL(urls);
+      console.log('Download URL: ' + urls);
+      const { webPreviewURL } = snack.getState();
+      setWebPreviewURL(webPreviewURL);
+      const connectedClients = await snack.getPreviewAsync();
+      console.log(connectedClients);
+    };
+
+    initializeSnack();
+  }, [code]);
+
+  const handleEditorChange = (value) => {
+    setCode(value);
+  };
+
+  return (
+    <div>
+      <style>{`
+        .app-container {
+          display: flex;
+          flex-direction: column;
+          height: 100vh;
+          max-width: 1400px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        
+        .header {
+          text-align: center;
+          margin-bottom: 20px;
+        }
+        
+        .main-content {
+          display: flex;
+          flex: 1;
+          gap: 20px;
+          height: calc(100vh - 120px);
+        }
+        
+        .editor-section {
+          flex: 1;
+          border: 1px solid #ddd;
+          border-radius: 8px;
+          overflow: hidden;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .preview-section {
+          display: flex;
+          flex-direction: column;
+          width: 450px;
+        }
+        
+        .phone-container {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          margin: 0 auto;
+          height: 100%;
+        }
+        
+        .model-buttons {
+          display: flex;
+          gap: 10px;
+          margin-bottom: 20px;
+          flex-wrap: wrap;
+          justify-content: center;
+        }
+        
+        .model-button {
+          padding: 8px 16px;
+          background-color: #f0f0f0;
+          border: 1px solid #ccc;
+          border-radius: 4px;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        
+        .model-button:hover {
+          background-color: #e0e0e0;
+        }
+        
+        .model-button.active {
+          background-color: #007bff;
+          color: white;
+          border-color: #0069d9;
+        }
+        
+        .phone-frame {
+          position: relative;
+          width: ${phoneModel.width}px;
+          height: ${phoneModel.height}px;
+          background-color: #111;
+          border-radius: 36px;
+          padding: 12px;
+          box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+          border: 1px solid #444;
+          transition: width 0.3s, height 0.3s;
+          margin: auto;
+        }
+        
+        .phone-frame:before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 150px;
+          height: 25px;
+          background-color: #111;
+          border-bottom-left-radius: 15px;
+          border-bottom-right-radius: 15px;
+          z-index: 2;
+        }
+        
+        .phone-screen {
+          width: 100%;
+          height: 100%;
+          background-color: white;
+          border-radius: 24px;
+          overflow: hidden;
+        }
+        
+        .phone-name {
+          margin-top: 10px;
+          font-weight: bold;
+          font-size: 14px;
+          color: #555;
+          text-align: center;
+        }
+      `}</style>
+      
+      <div className="app-container">
+        <div className="header">
+          <h1>SnacKD Code Editor</h1>
+        </div>
+        
+        <div className="main-content">
+          <div className="editor-section">
+            <Editor
+              height="100%"
+              defaultLanguage="javascript"
+              defaultValue={code}
+              onChange={handleEditorChange}
+              theme="vs-dark"
+              options={{
+                fontSize: 14,
+                minimap: { enabled: true },
+                scrollBeyondLastLine: false,
+                automaticLayout: true
+              }}
+            />
+          </div>
+          
+          <div className="preview-section">
+            <div className="model-buttons">
+              {phoneModels.map((model) => (
+                <button
+                  key={model.name}
+                  className={`model-button ${phoneModel.name === model.name ? 'active' : ''}`}
+                  onClick={() => changePhoneModel(model)}
+                >
+                  {model.label}
+                </button>
+              ))}
+            </div>
+            
+            <div className="phone-container">
+              <div className="phone-frame">
+                <div className="phone-screen">
+                  {webPreviewURL && (
+                    <iframe
+                      ref={(c) => (webPreviewRef.current = c?.contentWindow ?? null)}
+                      src={webPreviewURL}
+                      allow="geolocation; camera; microphone"
+                      style={{ width: '100%', height: '100%', border: 'none' }}
+                    />
+                  )}
+                </div>
+              </div>
+              
+              <div className="phone-name">
+                Modèle actuel : {phoneModel.label} ({phoneModel.width}x{phoneModel.height})
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App; 

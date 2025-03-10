@@ -1,350 +1,170 @@
 import { Snack } from 'snack-sdk';
 import { useState, useEffect } from 'react';
+import { generateAppStructure, generateFileContent } from '../services/openai';
 
-const SnackManager = ({ webPreviewRef, onWebPreviewURLChange, onDownloadURLChange, onFilesChange, onError }) => {
+const SnackManager = ({ 
+  webPreviewRef, 
+  onWebPreviewURLChange, 
+  onDownloadURLChange, 
+  onFilesChange, 
+  onError,
+  imageFile, // Nouvelle prop pour l'image
+  prompt     // Nouvelle prop pour le prompt
+}) => {
   const [snackInstance, setSnackInstance] = useState(null);
   const [files, setFiles] = useState({});
   const [error, setError] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // Utiliser useEffect pour réagir aux changements d'image et de prompt
+
+  // Fonction pour générer l'application à partir de l'image et du prompt
+  const generateAppFromImageAndPrompt = async (image, promptText,snack) => {
+    try {
+      setIsGenerating(true);
+
+      
+      // 1. Appeler l'API OpenAI pour obtenir la structure de l'application
+      const appStructure = await generateAppStructure(image, promptText);
+      
+      // 2. Générer le contenu de chaque fichier
+      const generatedFiles = {};
+      
+      // Pour simuler un chargement progressif, on peut utiliser Promise.all
+      await Promise.all(appStructure["files"].map(async (fileInfo) => {
+        try {
+          // Générer le contenu du fichier
+          const fileContent = await generateFileContent(fileInfo.filePrompt);
+          
+          // Ajouter le fichier à notre objet de fichiers
+          generatedFiles[fileInfo.filePath] = {
+            type: 'CODE',
+            contents: fileContent
+          };
+          snackInstance.updateFiles(
+            {
+              [fileInfo.filePath]: {
+                type: 'CODE',
+                contents: fileContent
+              }
+            }
+          );
+          console.log(`Fichier généré: ${fileInfo.filePath}`);
+        } catch (err) {
+          console.error(`Erreur lors de la génération du fichier ${fileInfo.filePath}:`, err);
+        }
+      }));
+
+      
+      // Si aucun fichier n'a été généré, utiliser une app par défaut
+      if (Object.keys(generatedFiles).length === 0) {
+        generatedFiles['App.js'] = {
+          type: 'CODE',
+          contents: `
+import * as React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+
+export default function App() {
+  return (
+    <View style={styles.container}>
+      <Text style={styles.text}>Application générée à partir de l'image et du prompt</Text>
+      <Text style={styles.subtitle}>Une erreur s'est produite lors de la génération complète</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#120d30',
+    padding: 20,
+  },
+  text: {
+    fontSize: 20,
+    color: '#0cffe1',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: 'rgba(240, 245, 255, 0.8)',
+    textAlign: 'center',
+  },
+});
+          `
+        };
+        
+        generatedFiles['package.json'] = {
+          type: 'CODE',
+          contents: `{
+  "dependencies": {
+    "react": "18.2.0",
+    "react-native": "0.72.6",
+    "expo": "~49.0.0",
+    "expo-status-bar": "~1.6.0"
+  }
+}`
+        };
+      }
+
+      
+      // 3. Mettre à jour l'état des fichiers
+
+      setFiles(generatedFiles);
+      if (onFilesChange) {
+        onFilesChange(generatedFiles);
+      }
+      console.log("tentative de mettre à jour l'instance Snack avec les nouveaux fichiers")
+      // 4. Mettre à jour l'instance Snack avec les nouveaux fichiers
+      if (snack) {
+        snack.updateFiles(generatedFiles);
+        // Mettre à jour l'URL de prévisualisation
+        const { webPreviewURL } = snack.getState();
+        onWebPreviewURLChange(webPreviewURL);
+        console.log("l'URL de prévisualisation a été mise à jour")
+        
+        // Mettre à jour l'URL de téléchargement
+        const downloadURL = await snack.getDownloadURLAsync();
+        onDownloadURLChange(downloadURL);
+        console.log("l'URL de téléchargement a été mise à jour")
+      }else{
+        console.log("l'instance Snack n'est pas initialisée")
+      }
+      
+      
+      setIsGenerating(false);
+    } catch (err) {
+      console.error("Erreur lors de la génération de l'application:", err);
+      setError(err);
+      setIsGenerating(false);
+      
+      if (onError) {
+        onError(err);
+      }
+    }
+  };
 
   useEffect(() => {
     const initializeSnack = async () => {
-      // Structure de fichiers Expo standard
       const initialFiles = {
-        'app.json': {
-          type: 'CODE',
-          contents: `{
-  "expo": {
-    "name": "my-expo-app",
-    "slug": "my-expo-app",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
-    "userInterfaceStyle": "automatic",
-    "splash": {
-      "image": "./assets/images/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
-    "ios": {
-      "supportsTablet": true
-    },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      }
-    },
-    "web": {
-      "bundler": "metro",
-      "favicon": "./assets/images/favicon.png"
-    },
-    "plugins": [
-      "expo-router"
-    ],
-    "experiments": {
-      "typedRoutes": true
-    }
-  }
-}`
-        },
-        'package.json': {
-          type: 'CODE',
-          contents: `{
-  "name": "my-expo-app",
-  "main": "expo-router/entry",
-  "version": "1.0.0",
-  "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
-  },
-  "dependencies": {
-    "expo": "~49.0.0",
-    "expo-constants": "~14.4.0",
-    "expo-linking": "~5.0.0",
-    "expo-router": "~4.0.17",
-    "expo-status-bar": "~1.6.0",
-    "react": "18.2.0",
-    "react-native": "0.72.5"
-  },
-  "devDependencies": {
-    "@babel/core": "^7.20.0",
-    "@types/react": "~18.2.14"
-  },
-  "private": true
-}`
-        },
         'App.js': {
           type: 'CODE',
-          contents: `import 'expo-router/entry';`
-        },
-        'app/_layout.tsx': {
-          type: 'CODE',
-          contents: `import { Stack } from 'expo-router';
-import { useColorScheme } from 'react-native';
+          contents: `
+            import * as React from 'react';
+            import { View, Text } from 'react-native';
 
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
-
-  return (
-    <Stack
-      screenOptions={{
-        headerStyle: {
-          backgroundColor: colorScheme === 'dark' ? '#000' : '#fff',
-        },
-        headerTintColor: colorScheme === 'dark' ? '#fff' : '#000',
-      }}
-    >
-      <Stack.Screen name="(tabs)" options={{ title: 'Tabs' }} />
-    </Stack>
-  );
-}`
-        },
-        'app/index.tsx': {
-          type: 'CODE',
-          contents: `import { StyleSheet, Text, View } from 'react-native';
-import { Link } from 'expo-router';
-
-export default function Home() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Welcome to Expo Router!</Text>
-      <View style={styles.separator} />
-      <Link href="/(tabs)" style={styles.link}>
-        <Text style={styles.linkText}>Go to tabs</Text>
-      </Link>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  separator: {
-    marginVertical: 30,
-    height: 1,
-    width: '80%',
-    backgroundColor: '#eee',
-  },
-  link: {
-    marginTop: 15,
-    paddingVertical: 15,
-  },
-  linkText: {
-    fontSize: 14,
-    color: '#2e78b7',
-  },
-});`
-        },
-        'app/(tabs)/_layout.tsx': {
-          type: 'CODE',
-          contents: `import { Tabs } from 'expo-router';
-import { useColorScheme, Text } from 'react-native';
-import { FontAwesome } from '@expo/vector-icons';
-
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
-  return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: colorScheme === 'dark' ? '#fff' : '#000',
-        tabBarInactiveTintColor: 'gray',
-        tabBarStyle: {
-          backgroundColor: colorScheme === 'dark' ? '#000' : '#fff',
-        },
-        headerStyle: {
-          backgroundColor: colorScheme === 'dark' ? '#000' : '#fff',
-        },
-        headerTintColor: colorScheme === 'dark' ? '#fff' : '#000',
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Tab One',
-          tabBarIcon: ({ color }) => <TabBarIcon name="code" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="two"
-        options={{
-          title: 'Tab Two',
-          tabBarIcon: ({ color }) => <TabBarIcon name="code" color={color} />,
-        }}
-      />
-    </Tabs>
-  );
-}
-
-// Utilisation de Text de React Native correctement
-function TabBarIcon(props) {
-  return <Text style={{ fontSize: 20, color: props.color }}>●</Text>;
-}`
-        },
-        'app/(tabs)/index.tsx': {
-          type: 'CODE',
-          contents: `import { StyleSheet, Text, View } from 'react-native';
-
-export default function TabOneScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Tab One</Text>
-      <View style={styles.separator} />
-      <Text>
-        This is an example tab. You can edit it in app/(tabs)/index.tsx.
+            const App = () => (
+            <View style={{flex: 1, justifyContent: 'center'}}>
+            <Text style={{fontSize: 20, textAlign: 'center', color: 'red'}}>
+             Hello Snack!
       </Text>
     </View>
   );
-}
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  separator: {
-    marginVertical: 30,
-    height: 1,
-    width: '80%',
-    backgroundColor: '#eee',
-  },
-});`
-        },
-        'app/(tabs)/two.tsx': {
-          type: 'CODE',
-          contents: `import { StyleSheet, Text, View } from 'react-native';
-
-export default function TabTwoScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Tab Two</Text>
-      <View style={styles.separator} />
-      <Text>
-        This is another tab. You can edit it in app/(tabs)/two.tsx.
-      </Text>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  separator: {
-    marginVertical: 30,
-    height: 1,
-    width: '80%',
-    backgroundColor: '#eee',
-  },
-});`
-        },
-        'app/modal.tsx': {
-          type: 'CODE',
-          contents: `import { StatusBar } from 'expo-status-bar';
-import { Platform, StyleSheet, Text, View, Pressable } from 'react-native';
-import { router } from 'expo-router';
-
-export default function ModalScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Modal</Text>
-      <View style={styles.separator} />
-      <Text style={styles.text}>
-        This is a modal screen. You can customize it as needed.
-      </Text>
-
-      <Pressable
-        style={styles.button}
-        onPress={() => router.back()}>
-        <Text style={styles.buttonText}>Close</Text>
-      </Pressable>
-
-      <StatusBar style={Platform.OS === 'ios' ? 'light' : 'auto'} />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  separator: {
-    marginVertical: 30,
-    height: 1,
-    width: '80%',
-    backgroundColor: '#eee',
-  },
-  text: {
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  button: {
-    backgroundColor: '#2e78b7',
-    borderRadius: 5,
-    padding: 10,
-    marginTop: 20,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-  },
-});`
-        },
-        'constants/colors.ts': {
-          type: 'CODE',
-          contents: `const tintColorLight = '#2f95dc';
-const tintColorDark = '#fff';
-
-export default {
-  light: {
-    text: '#000',
-    background: '#fff',
-    tint: tintColorLight,
-    tabIconDefault: '#ccc',
-    tabIconSelected: tintColorLight,
-  },
-  dark: {
-    text: '#fff',
-    background: '#000',
-    tint: tintColorDark,
-    tabIconDefault: '#ccc',
-    tabIconSelected: tintColorDark,
-  },
-};`
+            export default App;
+`
         }
       };
 
@@ -360,7 +180,11 @@ export default {
         webPreviewRef,
         sdkVersion: "49.0.0",  // Version Expo spécifiée
         name: "My Expo App",
-        description: "A standard Expo app with tabs navigation"
+        description: "A standard Expo app with tabs navigation",
+        onDownloadURLChange: (downloadURL) => {
+          console.log("l'URL de téléchargement a été mise à jour")
+        },
+        
       });
 
       setSnackInstance(snack);
@@ -377,23 +201,26 @@ export default {
         }
       });
 
-      console.log(snack);
-
       snack.setOnline(true);
       const { url } = await snack.getStateAsync();
       console.log(url);
       snack.setOnline(false);
       const urls = await snack.getDownloadURLAsync();
       onDownloadURLChange(urls);
-      console.log('Download URL: ' + urls);
       const { webPreviewURL } = snack.getState();
       onWebPreviewURLChange(webPreviewURL);
       const connectedClients = await snack.getPreviewAsync();
       console.log(connectedClients);
-    };
 
-    initializeSnack();
-  }, [webPreviewRef, onWebPreviewURLChange, onDownloadURLChange, onFilesChange]);
+      // Si l'image et le prompt sont déjà disponibles lors de l'initialisation, générer l'application
+      if (imageFile && prompt) {
+        generateAppFromImageAndPrompt(imageFile, prompt,snack);
+      }
+    };
+     initializeSnack();
+
+
+  }, [webPreviewRef, onWebPreviewURLChange, onDownloadURLChange, onFilesChange,imageFile, prompt]);
 
   // Fonction pour mettre à jour le contenu d'un fichier
   const updateFileContent = async (fileName, newContent) => {

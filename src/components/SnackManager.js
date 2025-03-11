@@ -1,6 +1,6 @@
 import { Snack } from 'snack-sdk';
 import { useState, useEffect } from 'react';
-import { generateAppStructure, generateFileContent } from '../services/openai';
+import { generateAppStructure, generateFileContent, generateFileContentWithImage } from '../services/openai';
 
 const SnackManager = ({ 
   webPreviewRef, 
@@ -27,34 +27,116 @@ const SnackManager = ({
       // 1. Appeler l'API OpenAI pour obtenir la structure de l'application
       const appStructure = await generateAppStructure(image, promptText);
       
-      // 2. Générer le contenu de chaque fichier
+      // 2. Générer le contenu de chaque fichier (sauf App.js)
       const generatedFiles = {};
       
       // Pour simuler un chargement progressif, on peut utiliser Promise.all
-      await Promise.all(appStructure["files"].map(async (fileInfo) => {
-        try {
-          // Générer le contenu du fichier
-          const fileContent = await generateFileContent(fileInfo.filePrompt);
-          
-          // Ajouter le fichier à notre objet de fichiers
-          generatedFiles[fileInfo.filePath] = {
-            type: 'CODE',
-            contents: fileContent
-          };
-          snackInstance.updateFiles(
-            {
-              [fileInfo.filePath]: {
-                type: 'CODE',
-                contents: fileContent
+      await Promise.all(appStructure["files"]
+        .filter(fileInfo => fileInfo.filePath !== 'App.js') // Exclure App.js de la génération initiale
+        .map(async (fileInfo) => {
+          try {
+            // Générer le contenu du fichier
+            const fileContent = await generateFileContent(fileInfo.filePrompt);
+            
+            // Ajouter le fichier à notre objet de fichiers
+            generatedFiles[fileInfo.filePath] = {
+              type: 'CODE',
+              contents: fileContent
+            };
+            snack.updateFiles(
+              {
+                [fileInfo.filePath]: {
+                  type: 'CODE',
+                  contents: fileContent
+                }
               }
-            }
-          );
-          console.log(`Fichier généré: ${fileInfo.filePath}`);
-        } catch (err) {
-          console.error(`Erreur lors de la génération du fichier ${fileInfo.filePath}:`, err);
-        }
-      }));
+            );
+            console.log(`Fichier généré: ${fileInfo.filePath}`);
+          } catch (err) {
+            console.error(`Erreur lors de la génération du fichier ${fileInfo.filePath}:`, err);
+          }
+        }));
 
+      // 3. Générer App.js en utilisant les informations des fichiers déjà générés
+      try {
+        // Créer un prompt qui décrit les fichiers déjà générés pour aider à créer un App.js cohérent
+        const filesInfo = Object.entries(generatedFiles).map(([path, file]) => {
+          return `${path}:\n${file.contents.slice(0, 300)}${file.contents.length > 300 ? '...' : ''}`;
+        }).join('\n\n');
+        
+        // Créer un prompt plus détaillé qui fait référence à l'image mais sans l'envoyer directement
+        const appJsPrompt = `Crée un fichier App.js complet pour une application React Native/Expo basée sur les fichiers suivants:
+${filesInfo}
+
+Utilise le même design que celui demandé dans le prompt initial: "${promptText}"
+
+Le fichier App.js doit:
+- Importer correctement tous les composants nécessaires des fichiers listés ci-dessus
+- Intégrer les composants créés dans les autres fichiers
+- Structurer l'application de manière cohérente
+- Utiliser les couleurs, styles et mises en page cohérents avec le reste de l'application
+- Servir de point d'entrée principal de l'application en organisant tous les composants`;
+        
+        // Utiliser la fonction existante
+        const appJsContent = await generateFileContentWithImage(appJsPrompt,image);
+        
+        // Ajouter App.js aux fichiers générés
+        generatedFiles['App.js'] = {
+          type: 'CODE',
+          contents: appJsContent
+        };
+        
+        // Mettre à jour Snack avec App.js
+        snack.updateFiles({
+          'App.js': {
+            type: 'CODE',
+            contents: appJsContent
+          }
+        });
+        
+        console.log('Fichier principal App.js généré');
+      } catch (err) {
+        console.error('Erreur lors de la génération du fichier App.js:', err);
+        
+        // Fallback en cas d'échec de génération de App.js
+        generatedFiles['App.js'] = {
+          type: 'CODE',
+          contents: `
+import * as React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+
+export default function App() {
+  return (
+    <View style={styles.container}>
+      <Text style={styles.text}>Application générée à partir de l'image et du prompt</Text>
+      <Text style={styles.subtitle}>Les composants sont disponibles dans les autres fichiers</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#120d30',
+    padding: 20,
+  },
+  text: {
+    fontSize: 20,
+    color: '#0cffe1',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: 'rgba(240, 245, 255, 0.8)',
+    textAlign: 'center',
+  },
+});
+          `
+        };
+      }
       
       // Si aucun fichier n'a été généré, utiliser une app par défaut
       if (Object.keys(generatedFiles).length === 0) {
@@ -212,15 +294,29 @@ const styles = StyleSheet.create({
       const connectedClients = await snack.getPreviewAsync();
       console.log(connectedClients);
 
+      return snack;
+    };
+     
+    // Initialiser Snack et générer l'application si nécessaire
+    const init = async () => {
+      const snack = await initializeSnack();
+      
       // Si l'image et le prompt sont déjà disponibles lors de l'initialisation, générer l'application
       if (imageFile && prompt) {
-        generateAppFromImageAndPrompt(imageFile, prompt,snack);
+        generateAppFromImageAndPrompt(imageFile, prompt, snack);
       }
     };
-     initializeSnack();
+    
+    init();
 
-
-  }, [webPreviewRef, onWebPreviewURLChange, onDownloadURLChange, onFilesChange,imageFile, prompt]);
+  }, []);  // Pas de dépendances pour éviter des ré-initialisations multiples
+  
+  // useEffect séparé pour réagir aux changements d'image et de prompt
+  useEffect(() => {
+    if (snackInstance && imageFile && prompt) {
+      generateAppFromImageAndPrompt(imageFile, prompt, snackInstance);
+    }
+  }, [imageFile, prompt]); // Ne se déclenche que quand imageFile ou prompt changent
 
   // Fonction pour mettre à jour le contenu d'un fichier
   const updateFileContent = async (fileName, newContent) => {

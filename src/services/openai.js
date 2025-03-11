@@ -2,17 +2,18 @@ import OpenAI from "openai";
 
 // Initialiser le client OpenAI avec la clé API
 const openai = new OpenAI({
-  apiKey: process.env.REACT_APP_OPENAI_API_KEY, // Les variables d'environnement React commencent par REACT_APP_
-  dangerouslyAllowBrowser: true // Active l'utilisation dans un environnement navigateur
+  apiKey: ""
 });
 
 // Définition des paramètres globaux pour l'API
 const OPENAI_MODEL = "gpt-4o-mini";
 const ENABLE_IMAGES = false; // Variable permettant d'activer/désactiver l'utilisation des images
-const USE_OLLAMA = true; // Variable pour activer ou désactiver l'utilisation d'Ollama
+const USE_OLLAMA = false; // Variable pour activer ou désactiver l'utilisation d'Ollama
 const OLLAMA_URL = "http://localhost:11434"; // URL du serveur Ollama
 const OLLAMA_MODEL = "deepseek-r1:8b"; // Modèle Ollama à utiliser
 const systemPrompt = "You are a developer, and your task is to generate only what is requested, without adding any introductory sentences or superfluous elements, ensuring the output aligns seamlessly with the site's style.TU NE DOIS PAS UTILISER DE LIBRAIRIES REACT NATIVE NAVIGATION que des composant react-native pur. Il ne doit pas avoir react-navigation ou autre librairie de navigation.Ajoute de la couleurs et des polices de caractères. Faut que ce soit jolies.";
+
+
 
 /**
  * Nettoie la réponse d'Ollama en retirant les balises <think></think>
@@ -189,6 +190,8 @@ export const generateAppStructure = async (imageFile, prompt) => {
     throw error;
   }
 };
+
+
 
 /**
  * Génère le contenu d'un fichier basé sur un prompt textuel et une image
@@ -385,5 +388,160 @@ const convertMarkdownToJsx = (markdownResponse) => {
     console.error("Erreur lors de la conversion Markdown vers JSX:", error);
     console.error("Contenu problématique:", markdownResponse);
     throw new Error("Impossible de convertir la réponse Markdown en JSX");
+  }
+};  
+
+/**
+ * Génère une description détaillée d'un écran avec une boucle de feedback pour s'assurer que tout est correctement décrit
+ * @param {File} imageFile - Le fichier image téléversé
+ * @param {string} prompt - Le prompt décrivant l'écran à générer
+ * @param {number} maxIterations - Nombre maximum d'itérations de feedback (par défaut: 3)
+ * @returns {Promise<Object>} - Un objet contenant la description détaillée de l'écran et les métadonnées
+ */
+export const generateDetailedScreen = async (imageFile, prompt, maxIterations = 3) => {
+  try {
+    let currentDescription = "";
+    let isComplete = false;
+    let iterations = 0;
+    let feedbackHistory = [];
+    
+    // Système prompt pour la génération détaillée
+    const detailedSystemPrompt = `${systemPrompt}
+Tu es un expert en design d'interface mobile et UI/UX. Ta mission est de décrire en détail un écran mobile basé sur les informations fournies.
+Ta description doit être exhaustive et inclure:
+1. La structure complète de l'écran (disposition, grille, etc.)
+2. Tous les éléments d'interface (boutons, entrées, cards, images, textes, etc.)
+3. Les détails de style (couleurs, typographie, ombres, effets, etc.)
+4. Les dimensions et espacements spécifiques
+5. Les comportements interactifs et animations
+6. Les états des éléments (normal, pressé, désactivé, etc.)
+7. L'accessibilité
+8. Les principes de design appliqués
+`;
+
+    while (!isComplete && iterations < maxIterations) {
+      iterations++;
+      console.log(`Itération ${iterations} de la génération détaillée de l'écran`);
+      
+      // Construire le prompt enrichi avec le feedback précédent
+      let enrichedPrompt = prompt;
+      if (iterations > 1 && feedbackHistory.length > 0) {
+        enrichedPrompt += `\n\nInformations supplémentaires basées sur le feedback précédent:\n${feedbackHistory.join('\n')}`;
+        enrichedPrompt += `\n\nVoici la description actuelle que tu dois améliorer:\n${currentDescription}`;
+      }
+      
+      // Messages pour l'API
+      const messages = [
+        {
+          "role": "system",
+          "content": detailedSystemPrompt
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": `Décris en détail l'écran mobile suivant basé sur ${ENABLE_IMAGES ? "l'image fournie et " : ""}le prompt: "${enrichedPrompt}". Ne te limite pas et sois aussi précis que possible.`
+            }
+          ]
+        }
+      ];
+      
+      // Ajouter l'image au message si activée et si on n'utilise pas Ollama
+      if (ENABLE_IMAGES && imageFile && !USE_OLLAMA) {
+        const base64Image = await fileToBase64(imageFile);
+        
+        messages.push({
+          "role": "user",
+          "content": [
+            {
+              "type": "image_url",
+              "image_url": {
+                "url": `data:image/png;base64,${base64Image}`
+              }
+            }
+          ]
+        });
+      }
+      
+      // Générer la description
+      let content;
+      if (USE_OLLAMA) {
+        content = await generateWithOllama(messages);
+      } else {
+        const response = await openai.chat.completions.create({
+          model: OPENAI_MODEL,
+          messages: messages,
+          temperature: 0.7,
+          max_tokens: 2048
+        });
+        content = response.choices[0].message.content;
+      }
+      
+      currentDescription = content;
+      
+      // Vérifier si la description est complète
+      if (iterations < maxIterations) {
+        const feedbackMessages = [
+          {
+            "role": "system",
+            "content": "Tu es un évaluateur expert en design d'interfaces. Ta mission est d'analyser si une description d'écran est complète et exhaustive."
+          },
+          {
+            "role": "user",
+            "content": `Évalue cette description d'écran et indique si elle est complète ou s'il manque des informations importantes:\n\n${currentDescription}\n\nFournis ta réponse au format JSON avec deux clés: "isComplete" (boolean) et "feedback" (string contenant les éléments manquants ou à améliorer).`
+          }
+        ];
+        
+        let feedbackResponse;
+        if (USE_OLLAMA) {
+          feedbackResponse = await generateWithOllama(feedbackMessages);
+        } else {
+          const response = await openai.chat.completions.create({
+            model: OPENAI_MODEL,
+            messages: feedbackMessages,
+            temperature: 0.5,
+            max_tokens: 1024
+          });
+          feedbackResponse = response.choices[0].message.content;
+        }
+        
+        // Extraire le JSON de la réponse
+        try {
+          const feedbackJson = JSON.parse(feedbackResponse.includes('```json') 
+            ? feedbackResponse.replace(/```json\s*|\s*```/g, '') 
+            : feedbackResponse);
+          
+          isComplete = feedbackJson.isComplete;
+          
+          if (!isComplete) {
+            feedbackHistory.push(feedbackJson.feedback);
+            console.log("Feedback reçu:", feedbackJson.feedback);
+          } else {
+            console.log("Description complète obtenue après", iterations, "itérations");
+          }
+        } catch (error) {
+          console.error("Erreur lors du parsing du feedback:", error);
+          console.error("Réponse problématique:", feedbackResponse);
+          // En cas d'erreur, on considère que c'est complet pour éviter une boucle infinie
+          isComplete = true;
+        }
+      } else {
+        // Si on atteint le nombre maximum d'itérations, on considère que c'est terminé
+        isComplete = true;
+        console.log("Nombre maximum d'itérations atteint");
+      }
+    }
+    
+    // Retourner l'objet final avec la description et les métadonnées
+    return {
+      description: currentDescription,
+      iterations: iterations,
+      feedback: feedbackHistory,
+      isComplete: isComplete
+    };
+  } catch (error) {
+    console.error("Erreur lors de la génération détaillée de l'écran:", error);
+    throw error;
   }
 };  

@@ -6,10 +6,110 @@ const openai = new OpenAI({
   dangerouslyAllowBrowser: true // Active l'utilisation dans un environnement navigateur
 });
 
-// Définition des paramètres globaux pour l'API OpenAI
+// Définition des paramètres globaux pour l'API
 const OPENAI_MODEL = "gpt-4o-mini";
-const ENABLE_IMAGES = true; // Variable permettant d'activer/désactiver l'utilisation des images
+const ENABLE_IMAGES = false; // Variable permettant d'activer/désactiver l'utilisation des images
+const USE_OLLAMA = true; // Variable pour activer ou désactiver l'utilisation d'Ollama
+const OLLAMA_URL = "http://localhost:11434"; // URL du serveur Ollama
+const OLLAMA_MODEL = "deepseek-r1:8b"; // Modèle Ollama à utiliser
 const systemPrompt = "You are a developer, and your task is to generate only what is requested, without adding any introductory sentences or superfluous elements, ensuring the output aligns seamlessly with the site's style.TU NE DOIS PAS UTILISER DE LIBRAIRIES REACT NATIVE NAVIGATION que des composant react-native pur. Il ne doit pas avoir react-navigation ou autre librairie de navigation.Ajoute de la couleurs et des polices de caractères. Faut que ce soit jolies.";
+
+/**
+ * Nettoie la réponse d'Ollama en retirant les balises <think></think>
+ * @param {string} response - La réponse à nettoyer
+ * @returns {string} - La réponse nettoyée
+ */
+const cleanOllamaResponse = (response) => {
+  if (!response) return "";
+  
+  // Retirer toutes les balises <think> et leur contenu
+  const cleaned = response.replace(/<think>([\s\S]*?)<\/think>/g, '');
+  
+  // Retirer les balises qui peuvent rester
+  return cleaned
+    .replace(/<think>/g, '')
+    .replace(/<\/think>/g, '')
+    .trim();
+};
+
+/**
+ * Fonction pour générer du texte via l'API Ollama
+ * @param {Array} messages - Les messages à envoyer au modèle
+ * @returns {Promise<string>} - Le texte généré
+ */
+const generateWithOllama = async (messages) => {
+  try {
+    // Convertir les messages au format compatible avec Ollama
+    let prompt = "";
+    
+    // Ajouter le système
+    const systemMessage = messages.find(msg => msg.role === "system");
+    if (systemMessage && systemMessage.content) {
+      // Si le contenu est un tableau (pour les messages avec images), extraire le texte
+      const content = Array.isArray(systemMessage.content) 
+        ? systemMessage.content.find(c => c.type === "text")?.text || ""
+        : systemMessage.content;
+      prompt += `Système: ${content}\n\n`;
+    }
+    
+    // Ajouter les messages utilisateur
+    for (const msg of messages) {
+      if (msg.role === "user") {
+        // Si le contenu est un tableau (pour les messages avec images), extraire le texte
+        if (Array.isArray(msg.content)) {
+          const textContent = msg.content.find(c => c.type === "text")?.text;
+          if (textContent) {
+            prompt += `Utilisateur: ${textContent}\n\n`;
+          }
+          
+          // Pour les images, on indique simplement qu'une image a été fournie
+          const hasImage = msg.content.some(c => c.type === "image_url");
+          if (hasImage && ENABLE_IMAGES) {
+            prompt += "Note: Une image a été fournie mais ne peut pas être traitée par Ollama.\n\n";
+          }
+        } else {
+          prompt += `Utilisateur: ${msg.content}\n\n`;
+        }
+      }
+    }
+    
+    console.log("Envoi de la requête à Ollama avec prompt:", prompt);
+    
+    // Appel à l'API Ollama
+    const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        prompt: prompt,
+        stream: false
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Erreur lors de l'appel à Ollama: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log("Réponse d'Ollama:", data);
+    
+    if (!data.response) {
+      console.error("La réponse d'Ollama ne contient pas de champ 'response':", data);
+      return "Erreur: Réponse inattendue d'Ollama";
+    }
+    
+    // Nettoyer la réponse pour retirer les balises <think></think>
+    const cleanedResponse = cleanOllamaResponse(data.response);
+    console.log("Réponse nettoyée:", cleanedResponse);
+    
+    return cleanedResponse;
+  } catch (error) {
+    console.error("Erreur lors de l'appel à Ollama:", error);
+    throw error;
+  }
+};
 
 /**
  * Génère un JSON décrivant les fichiers à créer pour une application Expo basée sur une image et un prompt
@@ -42,7 +142,7 @@ export const generateAppStructure = async (imageFile, prompt) => {
     ];
     
     // Ajouter l'image au message si activée
-    if (ENABLE_IMAGES && imageFile) {
+    if (ENABLE_IMAGES && imageFile && !USE_OLLAMA) {
       // Convertir l'image en base64
       const base64Image = await fileToBase64(imageFile);
       
@@ -59,24 +159,33 @@ export const generateAppStructure = async (imageFile, prompt) => {
       });
     }
     
-    // Appeler l'API OpenAI
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages: messages,
-      response_format: {
-        "type": "text"
-      },
-      temperature: 0.5,
-      max_completion_tokens: 2048,
-      top_p: 1,
-      frequency_penalty: 0,
-      presence_penalty: 0
-    });
-    // Utiliser la nouvelle fonction de conversion
-    const jsonResponse = convertMarkdownToJson(response.choices[0].message.content);
+    let content;
+    
+    // Utiliser Ollama ou OpenAI selon la configuration
+    if (USE_OLLAMA) {
+      content = await generateWithOllama(messages);
+    } else {
+      // Appeler l'API OpenAI
+      const response = await openai.chat.completions.create({
+        model: OPENAI_MODEL,
+        messages: messages,
+        response_format: {
+          "type": "text"
+        },
+        temperature: 0.5,
+        max_completion_tokens: 2048,
+        top_p: 1,
+        frequency_penalty: 0,
+        presence_penalty: 0
+      });
+      content = response.choices[0].message.content;
+    }
+    
+    // Utiliser la fonction de conversion
+    const jsonResponse = convertMarkdownToJson(content);
     return jsonResponse;
   } catch (error) {
-    console.error("Erreur lors de l'appel à l'API OpenAI:", error);
+    console.error("Erreur lors de l'appel à l'API:", error);
     throw error;
   }
 };
@@ -113,28 +222,34 @@ const convertImageToBase64 = (image) => {
  * @returns {Promise<string>} - Le contenu du fichier généré
  */
 export const generateFileContent = async (filePrompt) => {
-  
   try {
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages: [
-        {
-          "role": "system",
-          "content": systemPrompt
-        },
-        {
-          "role": "user",
-          "content": `${filePrompt} , tu ne dois fournir que le code jsx, rien d'autre, il ne doit pas contenir de commentaires,ni d'erreurs, juste le code jsx. Applique toi sur la responsivité et les dimensions il faut qu'il prenne toute la largeur de l'écran. Respecte les règles d'ui/ux`
-        }
-      ],
-      temperature: 0.7,
-      max_tokens: 2048
-    });
+    const messages = [
+      {
+        "role": "system",
+        "content": systemPrompt
+      },
+      {
+        "role": "user",
+        "content": `${filePrompt} , tu ne dois fournir que le code jsx, rien d'autre, il ne doit pas contenir de commentaires,ni d'erreurs, juste le code jsx. Applique toi sur la responsivité et les dimensions il faut qu'il prenne toute la largeur de l'écran. Respecte les règles d'ui/ux`
+      }
+    ];
 
-    // Si la réponse est supposée être du JSON, utilisez la fonction de conversion
-    const content = response.choices[0].message.content;
+    let content;
     
-    // Vérifier si la réponse semble être du JSON avec des marqueurs Markdown
+    // Utiliser Ollama ou OpenAI selon la configuration
+    if (USE_OLLAMA) {
+      content = await generateWithOllama(messages);
+    } else {
+      const response = await openai.chat.completions.create({
+        model: OPENAI_MODEL,
+        messages: messages,
+        temperature: 0.7,
+        max_tokens: 2048
+      });
+      content = response.choices[0].message.content;
+    }
+    
+    // Vérifier si la réponse semble être du JSX avec des marqueurs Markdown
     if (content.includes('```jsx')) {
       return convertMarkdownToJsx(content);
     }
@@ -160,8 +275,8 @@ export const generateFileContentWithImage = async (filePrompt, imageFile) => {
     }
   ];
 
-  // Ajouter l'image au message si activée
-  if (ENABLE_IMAGES && imageFile) {
+  // Ajouter l'image au message si activée et si on n'utilise pas Ollama
+  if (ENABLE_IMAGES && imageFile && !USE_OLLAMA) {
     const base64Image = await fileToBase64(imageFile);
     
     messages.push({
@@ -178,17 +293,22 @@ export const generateFileContentWithImage = async (filePrompt, imageFile) => {
   }
 
   try {
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages: messages,
-      temperature: 0.7,
-      max_tokens: 2048
-    });
-
-    // Si la réponse est supposée être du JSON, utilisez la fonction de conversion
-    const content = response.choices[0].message.content;
+    let content;
     
-    // Vérifier si la réponse semble être du JSON avec des marqueurs Markdown
+    // Utiliser Ollama ou OpenAI selon la configuration
+    if (USE_OLLAMA) {
+      content = await generateWithOllama(messages);
+    } else {
+      const response = await openai.chat.completions.create({
+        model: OPENAI_MODEL,
+        messages: messages,
+        temperature: 0.7,
+        max_tokens: 2048
+      });
+      content = response.choices[0].message.content;
+    }
+    
+    // Vérifier si la réponse semble être du JSX avec des marqueurs Markdown
     if (content.includes('```jsx')) {
       return convertMarkdownToJsx(content);
     }

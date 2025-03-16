@@ -2,8 +2,14 @@ import OpenAI from "openai";
 
 // Initialiser le client OpenAI avec la clé API
 const openai = new OpenAI({
-  apiKey: ""
+  apiKey: "",
+  // ATTENTION: Cette option permet l'utilisation dans un navigateur mais expose potentiellement 
+  // votre clé API aux utilisateurs. À utiliser avec précaution et idéalement avec des mesures
+  // de sécurité supplémentaires comme un proxy backend.
+  // Voir: https://help.openai.com/en/articles/5112595-best-practices-for-api-key-safety
+  dangerouslyAllowBrowser: true
 });
+
 
 // Définition des paramètres globaux pour l'API
 const OPENAI_MODEL = "gpt-4o-mini";
@@ -545,3 +551,235 @@ Ta description doit être exhaustive et inclure:
     throw error;
   }
 };  
+
+export const gerateFilesObject = async (detailedScreen) => {
+  try {
+    // Messages pour l'API
+    const messages = [
+      {
+        "role": "system",
+        "content": systemPrompt + "\nTu es un expert React Native qui analyse des descriptions d'écrans pour identifier les composants et fichiers nécessaires."
+      },
+      {
+        "role": "user",
+        "content": `En te basant sur cette description détaillée d'écran : [${detailedScreen.description}], génère un objet JSON décrivant tous les fichiers nécessaires pour implémenter cet écran en React Native.
+
+L'objet doit contenir une clé "files" associée à un tableau d'objets. Chaque objet doit respecter le format suivant :
+{
+  "filePath": "chemin/du/fichier.ext", // chemin relatif à la racine du projet (exemple: "App.js" ou "components/Button.js")
+  "filePrompt": "Description détaillée pour générer le contenu de ce fichier en respectant les bonnes pratiques React Native",
+  "description": "Brève description du rôle et des fonctionnalités de ce fichier",
+}
+
+N'utilise pas de librairies de navigation React Native, seulement des composants React Native purs.
+Assure-toi d'inclure tous les fichiers nécessaires: composants, styles, utilitaires, etc.
+Fournis uniquement l'objet JSON en réponse, sans texte supplémentaire.`
+      }
+    ];
+
+    let content;
+    
+    // Utiliser Ollama ou OpenAI selon la configuration
+    if (USE_OLLAMA) {
+      content = await generateWithOllama(messages);
+    } else {
+      // Appeler l'API OpenAI
+      const response = await openai.chat.completions.create({
+        model: OPENAI_MODEL,
+        messages: messages,
+        response_format: {
+          "type": "text"
+        },
+        temperature: 0.5,
+        max_completion_tokens: 2048,
+        top_p: 1,
+        frequency_penalty: 0,
+        presence_penalty: 0
+      });
+      content = response.choices[0].message.content;
+    }
+    
+    // Utiliser la fonction de conversion pour parser le JSON
+    const jsonResponse = convertMarkdownToJson(content);
+    return jsonResponse;
+  } catch (error) {
+    console.error("Erreur lors de la génération de la structure des fichiers:", error);
+    throw error;
+  }
+};
+
+/**
+ * Améliore itérativement la description et le prompt de chaque fichier
+ * @param {Object} fileObject - L'objet fichier initial à améliorer
+ * @param {number} maxIterations - Nombre maximum d'itérations (par défaut: 3)
+ * @returns {Promise<Object>} - L'objet fichier amélioré
+ */
+export const improveFileDescription = async (fileObject, maxIterations = 3) => {
+  try {
+    let currentFile = { ...fileObject };
+    let isComplete = false;
+    let iterations = 0;
+    let feedbackHistory = [];
+    
+    while (!isComplete && iterations < maxIterations) {
+      iterations++;
+      
+      // Messages pour l'API
+      const messages = [
+        {
+          "role": "system",
+          "content": `${systemPrompt}
+Tu es un expert React Native qui analyse et améliore la description et le prompt des fichiers pour obtenir un code de meilleure qualité.`
+        },
+        {
+          "role": "user",
+          "content": `Améliore la description et le prompt de ce fichier React Native:
+          
+Fichier: ${currentFile.filePath}
+Description actuelle: ${currentFile.description}
+Prompt actuel: ${currentFile.filePrompt}
+
+${iterations > 1 ? `Historique des feedbacks:\n${feedbackHistory.join('\n')}` : ''}
+
+Fournis une version améliorée avec plus de détails sur:
+1. La structure exacte du composant
+2. Les propriétés et états nécessaires
+3. Les styles spécifiques (couleurs, dimensions, marges...)
+4. La gestion des événements et interactions
+5. Les bonnes pratiques React Native à appliquer
+
+Réponds avec un objet JSON contenant les clés suivantes:
+{
+  "description": "Nouvelle description améliorée",
+  "filePrompt": "Nouveau prompt amélioré avec tous les détails nécessaires"
+}`
+        }
+      ];
+      
+      let content;
+      
+      if (USE_OLLAMA) {
+        content = await generateWithOllama(messages);
+      } else {
+        const response = await openai.chat.completions.create({
+          model: OPENAI_MODEL,
+          messages: messages,
+          temperature: 0.7,
+          max_tokens: 2048
+        });
+        content = response.choices[0].message.content;
+      }
+      
+      // Extraire le JSON de la réponse
+      try {
+        const improvedData = JSON.parse(content.includes('```json') 
+          ? content.replace(/```json\s*|\s*```/g, '') 
+          : content);
+        
+        // Mettre à jour l'objet fichier
+        currentFile = {
+          ...currentFile,
+          description: improvedData.description,
+          filePrompt: improvedData.filePrompt
+        };
+        
+        // Vérifier si l'amélioration est complète
+        if (iterations < maxIterations) {
+          const feedbackMessages = [
+            {
+              "role": "system",
+              "content": "Tu es un évaluateur expert en React Native. Ta mission est d'analyser si la description d'un fichier est complète et exhaustive."
+            },
+            {
+              "role": "user",
+              "content": `Évalue cette description et prompt de fichier et indique s'ils sont complets ou s'il manque des informations importantes:
+              
+Fichier: ${currentFile.filePath}
+Description: ${currentFile.description}
+Prompt: ${currentFile.filePrompt}
+
+Fournis ta réponse au format JSON avec deux clés: "isComplete" (boolean) et "feedback" (string contenant les éléments manquants ou à améliorer).`
+            }
+          ];
+          
+          let feedbackResponse;
+          if (USE_OLLAMA) {
+            feedbackResponse = await generateWithOllama(feedbackMessages);
+          } else {
+            const response = await openai.chat.completions.create({
+              model: OPENAI_MODEL,
+              messages: feedbackMessages,
+              temperature: 0.5,
+              max_tokens: 1024
+            });
+            feedbackResponse = response.choices[0].message.content;
+          }
+          
+          const feedbackJson = JSON.parse(feedbackResponse.includes('```json') 
+            ? feedbackResponse.replace(/```json\s*|\s*```/g, '') 
+            : feedbackResponse);
+          
+          isComplete = feedbackJson.isComplete;
+          
+          if (!isComplete) {
+            feedbackHistory.push(feedbackJson.feedback);
+            console.log(`Feedback pour ${currentFile.filePath}:`, feedbackJson.feedback);
+          } else {
+            console.log(`Description complète pour ${currentFile.filePath} obtenue après ${iterations} itérations`);
+          }
+        } else {
+          isComplete = true;
+          console.log(`Nombre maximum d'itérations atteint pour ${currentFile.filePath}`);
+        }
+      } catch (error) {
+        console.error(`Erreur lors du traitement de l'amélioration pour ${currentFile.filePath}:`, error);
+        isComplete = true; // Pour éviter une boucle infinie
+      }
+    }
+    
+    return {
+      ...currentFile,
+      iterations,
+      feedbackHistory,
+      isComplete
+    };
+  } catch (error) {
+    console.error("Erreur lors de l'amélioration de la description du fichier:", error);
+    return fileObject; // Retourner l'objet initial en cas d'erreur
+  }
+};
+
+/**
+ * Génère un objet de fichiers amélioré en itérant sur chaque fichier pour améliorer sa description
+ * @param {Object} detailedScreen - La description détaillée de l'écran
+ * @param {number} maxIterations - Nombre maximum d'itérations par fichier (par défaut: 3)
+ * @returns {Promise<Object>} - L'objet contenant les fichiers améliorés
+ */
+export const generateImprovedFilesObject = async (detailedScreen, maxIterations = 3) => {
+  try {
+    // Générer d'abord l'objet de fichiers initial
+    const initialFilesObject = await gerateFilesObject(detailedScreen);
+    
+    if (!initialFilesObject.files || !Array.isArray(initialFilesObject.files)) {
+      throw new Error("Format de l'objet de fichiers invalide");
+    }
+    
+    console.log(`Amélioration de ${initialFilesObject.files.length} fichiers...`);
+    
+    // Améliorer chaque fichier de manière itérative
+    const improvedFiles = [];
+    for (const file of initialFilesObject.files) {
+      console.log(`Traitement de l'amélioration pour: ${file.filePath}`);
+      const improvedFile = await improveFileDescription(file, maxIterations);
+      improvedFiles.push(improvedFile);
+    }
+    
+    return {
+      ...initialFilesObject,
+      files: improvedFiles
+    };
+  } catch (error) {
+    console.error("Erreur lors de la génération améliorée de la structure des fichiers:", error);
+    throw error;
+  }
+};
